@@ -207,10 +207,10 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
         recs.append(out)
 
         diff = out["trip_time"] - base
-        if   diff>3: headway=10
-        elif diff>2: headway=15
-        elif diff>1: headway=20
-        else:        headway=30
+        if   diff>2.5: headway=7
+        elif diff>1: headway=10
+        elif diff>0.5: headway=15
+        else:        headway=20
 
         dep += dt.timedelta(minutes=headway)
 

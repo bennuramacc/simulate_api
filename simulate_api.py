@@ -1,29 +1,29 @@
 # -*- coding: utf-8 -*-
 import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
 from dataclasses import dataclass
+from typing import Literal
 from catboost import CatBoostRegressor
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Literal
 
-# ─── 0) Dosya yolları ────────────────────────────────────────
+# ─── 0) Dosya yolları ────────────────────────────────────────────────
 BASE_DIR     = os.path.dirname(__file__)
 TRAVEL_XLSX  = os.path.join(BASE_DIR, "Travel Times & Dwell Times.xlsx")
 ARRIVAL_XLS  = os.path.join(BASE_DIR, "passenger_arrival_rates_by_stop.xlsx")
 DEST_PATH    = os.path.join(BASE_DIR, "DestinationProbabilities_Corrected.xlsx")
 MODEL_PATH   = os.path.join(BASE_DIR, "segment_model.cbm")
 
-# ─── FastAPI uygulaması & CORS ───────────────────────────────
+# ─── FastAPI & CORS ──────────────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # Gerekirse sadece frontend origin’inizi ekleyin
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── 1) Travel + Dwell tablosu ───────────────────────────────
+# ─── 1) Travel + Dwell tablosu ──────────────────────────────────────
 def build_stops() -> pd.DataFrame:
     df = pd.read_excel(TRAVEL_XLSX, header=1)
     df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
@@ -37,26 +37,25 @@ def build_stops() -> pd.DataFrame:
 
 SEG_DF = build_stops()
 
-# ─── 2) Arrival‐rate haritası ──────────────────────────────────
+# ─── 2) Arrival‐rate haritası ────────────────────────────────────────
 arrival_sheets = pd.read_excel(ARRIVAL_XLS, sheet_name=None)
 time_re = re.compile(r"^\d{2}:\d{2}-\d{2}:\d{2}$")
 ARRIVAL_MAP = {}
 for name, df in arrival_sheets.items():
     df = df.set_index(df.columns[0])
-    ARRIVAL_MAP[name] = df[[c for c in df.columns if time_re.match(c)]]
+    cols = [c for c in df.columns if time_re.match(c)]
+    ARRIVAL_MAP[name] = df[cols]
 
-DAY_MAP = {
-    "Monday":"Pazartesi","Tuesday":"Salı","Wednesday":"Çarşamba",
-    "Thursday":"Perşembe","Friday":"Cuma","Saturday":"Cumartesi","Sunday":"Pazar"
-}
+DAY_MAP   = {"Monday":"Pazartesi","Tuesday":"Salı","Wednesday":"Çarşamba",
+             "Thursday":"Perşembe","Friday":"Cuma","Saturday":"Cumartesi","Sunday":"Pazar"}
 ARR_SCALE = 600.0
 
 def get_lambda(stop: str, now: dt.datetime) -> float:
     df = ARRIVAL_MAP.get(stop)
     if df is None: return 0.0
     day = DAY_MAP[now.strftime("%A")]
-    if day not in df.index: return 0.0
-    row = df.loc[day]
+    row = df.loc[day] if day in df.index else None
+    if row is None: return 0.0
     m = now.hour*60 + now.minute
     for iv,val in row.items():
         s,e = iv.split("-")
@@ -66,14 +65,22 @@ def get_lambda(stop: str, now: dt.datetime) -> float:
             return float(val)
     return float(row.iloc[-1])
 
-# ─── 3) Destination probabilities ─────────────────────────────
+# ─── 3) Beklenen load hesaplama ────────────────────────────────────
+def estimate_expected_load(dep: dt.datetime, sc: "Scenario") -> float:
+    now, tot = dep, 0.0
+    for r in SEG_DF.itertuples():
+        lam = get_lambda(r.stop, now) * ARR_SCALE * sc.demand_multiplier
+        tot += lam * (r.travel_min/60)
+        now += dt.timedelta(minutes=r.travel_min)
+    return tot
+
+# ─── 4) Destination probabilities ───────────────────────────────────
 dp_raw = pd.read_excel(DEST_PATH, index_col=0)
 dp     = dp_raw.div(dp_raw.sum(axis=1), axis=0).fillna(0)
 DEST   = {o:(list(dp.columns), dp.loc[o].tolist()) for o in dp.index}
 
-# ─── 4) CatBoost modeli & feature list ────────────────────────
-CAT = CatBoostRegressor()
-CAT.load_model(MODEL_PATH)
+# ─── 5) CatBoost modeli & feature list ─────────────────────────────
+CAT = CatBoostRegressor(); CAT.load_model(MODEL_PATH)
 FEATS = [
  'weather_temp','HOUR',
  'DAY_OF_WEEK_1','DAY_OF_WEEK_2','DAY_OF_WEEK_3',
@@ -90,12 +97,11 @@ FEATS = [
 
 def make_feats(now: dt.datetime, sc: "Scenario", km: float, lags: list[float]) -> list[float]:
     f = {k:0 for k in FEATS}
-    f["HOUR"] = now.hour
-    f["weather_temp"] = sc.temp
+    f["HOUR"] = now.hour; f["weather_temp"] = sc.temp
     f[f"DAY_OF_WEEK_{now.weekday()+1}"] = 1
-    f[f"MONTH_{now.month}"]          = 1
-    f["HOLIDAY_CATEGORY_Holiday"]    = int(sc.is_public_holiday)
-    f["HOLIDAY_CATEGORY_Normal"]     = int(not sc.is_public_holiday)
+    f[f"MONTH_{now.month}"] = 1
+    f["HOLIDAY_CATEGORY_Holiday"] = int(sc.is_public_holiday)
+    f["HOLIDAY_CATEGORY_Normal"]  = int(not sc.is_public_holiday)
     f["SCHOOL_STATUS_School Open"]   = int(sc.is_school_day)
     f["PANDEMIC_CONDITION_Pandemic"] = int(sc.is_pandemic)
     wd = f"weather_description_{sc.weather_desc}"
@@ -105,11 +111,10 @@ def make_feats(now: dt.datetime, sc: "Scenario", km: float, lags: list[float]) -
         f[f"HATSURESI_LAG_{i}"] = v
     return [f[c] for c in FEATS]
 
-# ─── 5) BusType & Scenario ─────────────────────────────────────
+# ─── 6) BusType & Scenario ─────────────────────────────────────────
 @dataclass(frozen=True)
 class BusType:
-    name: str
-    capacity: int
+    name: str; capacity: int
 
 STD   = BusType("Standard", 90)
 ARTIC = BusType("Körüklü", 120)
@@ -121,143 +126,117 @@ class Scenario:
     demand_multiplier: float
     is_school_day:     bool
     is_public_holiday: bool
-    is_pandemic:       bool = False
+    is_pandemic:       bool   = False
     bus_type:          BusType = STD
 
-# ─── 6) Tek bir sefer simülasyonu ───────────────────────────────
+# ─── 7) Tek bir sefer simülasyonu ─────────────────────────────────
 def one_trip(dep: dt.datetime, sc: Scenario) -> dict:
-    LOG = []
-    env = simpy.Environment()
-
+    LOG=[]; env=simpy.Environment()
     class Bus:
-        def __init__(self, env, dep, sc):
-            self.env, self.dep, self.sc = env, dep, sc
-            self.curr = dep
-            self.seg  = SEG_DF.copy()
-            self.pax  = []
-            self.max_occ = 0
-            self.boarded = 0
-            self.lags = [0]*5
+        def __init__(self,env,dep,sc):
+            self.env,self.dep,self.sc=env,dep,sc
+            self.curr=dep; self.seg=SEG_DF.copy()
+            self.pax=[]; self.max_occ=0; self.boarded=0; self.lags=[0]*5
             env.process(self.run())
-
         def run(self):
             delay = (self.dep - dt.datetime.combine(self.dep.date(), dt.time())).seconds/60
             yield self.env.timeout(delay)
-
-            trip_time = 0.0
+            trip_time=0.0
             for r in self.seg.itertuples():
-                now,stop,km = self.curr, r.stop, r.km
-                feat_df = pd.DataFrame([make_feats(now,self.sc,km,self.lags)], columns=FEATS)
-                sec = float(CAT.predict(feat_df)[0])
-                dur = sec/60
-                self.lags = [dur] + self.lags[:4]
-                trip_time += dur
+                now,stop,km=self.curr,r.stop,r.km
+                feat_df=pd.DataFrame([make_feats(now,self.sc,km,self.lags)],columns=FEATS)
+                sec=float(CAT.predict(feat_df)[0]); dur=sec/60
+                self.lags=[dur]+self.lags[:4]; trip_time+=dur
                 yield self.env.timeout(dur)
-                self.curr += dt.timedelta(minutes=dur)
-
-                out = [p for p in self.pax if p==stop]
-                self.pax = [p for p in self.pax if p!=stop]
-                lam = get_lambda(stop,now)*ARR_SCALE*self.sc.demand_multiplier
-                if self.sc.is_public_holiday: lam *= 0.8
-                nin = np.random.poisson(lam * dur)
-                dests,probs = DEST.get(stop,([],[]))
-                new = (np.random.choice(dests,size=nin,p=probs).tolist() if dests else [stop]*nin)
-                self.pax.extend(new)
-                self.boarded += nin
-                self.max_occ = max(self.max_occ, len(self.pax))
-
-                dwell = (r.dwell_sec/60) + len(out)*0.03 + nin*0.01
-                if self.sc.is_school_day:    dwell *= 1.1
-                if self.sc.is_public_holiday:dwell *= 1.2
-                trip_time += dwell
-                yield self.env.timeout(dwell)
-                self.curr += dt.timedelta(minutes=dwell)
-
+                self.curr+=dt.timedelta(minutes=dur)
+                out=[p for p in self.pax if p==stop]
+                self.pax=[p for p in self.pax if p!=stop]
+                lam=get_lambda(stop,now)*ARR_SCALE*self.sc.demand_multiplier
+                if self.sc.is_public_holiday: lam*=0.8
+                nin=np.random.poisson(lam*dur)
+                dests,probs=DEST.get(stop,([],[]))
+                new=(np.random.choice(dests,size=nin,p=probs).tolist() if dests else [stop]*nin)
+                self.pax.extend(new); self.boarded+=nin
+                self.max_occ=max(self.max_occ,len(self.pax))
+                dwell=(r.dwell_sec/60)+len(out)*0.03+nin*0.01
+                if self.sc.is_school_day:    dwell*=1.1
+                if self.sc.is_public_holiday:dwell*=1.2
+                trip_time+=dwell; yield self.env.timeout(dwell)
+                self.curr+=dt.timedelta(minutes=dwell)
             LOG.append({
-                "depart_time": self.dep.strftime("%H:%M"),
-                "bus_type":    self.sc.bus_type.name,
-                "capacity":    self.sc.bus_type.capacity,
-                "trip_time":   round(trip_time,2),
-                "max_occ":     self.max_occ,
-                "boarded":     self.boarded
+                "depart_time":self.dep.strftime("%H:%M"),
+                "bus_type":   self.sc.bus_type.name,
+                "capacity":   self.sc.bus_type.capacity,
+                "trip_time":  round(trip_time,2),
+                "max_occ":    self.max_occ,
+                "boarded":    self.boarded
             })
-
-    Bus(env, dep, sc)
-    env.run()
+    Bus(env,dep,sc); env.run()
     return LOG[0]
 
-# ─── 7) Ortalama trip zamanı ───────────────────────────────────────
+# ─── 8) Ortalama trip zamanı ────────────────────────────────────────
 def avg_trip(sc: Scenario, start: str, end: str) -> float:
-    times = pd.date_range(start=start, end=end, freq="30min").time
-    return np.mean([
-        one_trip(dt.datetime.combine(dt.date.today(), t), sc)["trip_time"]
-        for t in times
-    ])
+    times = pd.date_range(start=start,end=end,freq="30min").time
+    return np.mean([one_trip(dt.datetime.combine(dt.date.today(),t),sc)["trip_time"]
+                    for t in times])
 
-# ─── 8) Dinamik slot‐day ──────────────────────────────────────────
-CURRENT_THR = 90  # orijinal eşik değeri
-
+# ─── 9) Dinamik slot-day ──────────────────────────────────────────
+CURRENT_THR=90
 def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFrame:
-    base = avg_trip(sc, start, end)
-    recs = []
-    headway = 30
-    dep     = dt.datetime.combine(dt.date.today(), pd.to_datetime(start).time())
-    end_dt  = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
-
-    while dep <= end_dt:
-        # hangi araç?
+    base = avg_trip(sc,start,end)
+    recs=[]; headway=30
+    dep    = dt.datetime.combine(dt.date.today(),pd.to_datetime(start).time())
+    end_dt = dt.datetime.combine(dt.date.today(),pd.to_datetime(end).time())
+    while dep<=end_dt:
+        # **Burada gerçekten ARTIC seçiliyor**
         exp = estimate_expected_load(dep, sc)
         sc.bus_type = ARTIC if exp > CURRENT_THR else STD
 
         out = one_trip(dep, sc)
-        out["headway"] = headway
-        out["max_occ"] *= 6
-        out["boarded"] *= 5
-        out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
+        out["headway"]   = headway
+        out["max_occ"]  *= 6
+        out["boarded"]  *= 5
+        out["load_%"]    = round(100*out["max_occ"]/out["capacity"],2)
 
-        # eğer load% > 90 ise körüklü ata
-        if out["load_%"] > 90:
-            sc.bus_type    = ARTIC
+        if out["load_%"]>90:
+            sc.bus_type     = ARTIC
             out["bus_type"] = ARTIC.name
             out["capacity"] = ARTIC.capacity
-            out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
+            out["load_%"]   = round(100*out["max_occ"]/out["capacity"],2)
 
         recs.append(out)
 
-        # headway güncelle
         diff = out["trip_time"] - base
-        if   diff > 3: headway = 10
-        elif diff > 2: headway = 15
-        elif diff > 1: headway = 20
-        else:           headway = 30
+        if   diff>3: headway=10
+        elif diff>2: headway=15
+        elif diff>1: headway=20
+        else:        headway=30
 
         dep += dt.timedelta(minutes=headway)
 
     return pd.DataFrame(recs)
 
-# ─── 9) Pydantic model & endpoint ────────────────────────────────
+# ─── 10) Endpoint ───────────────────────────────────────────────────
 class SimRequest(BaseModel):
     weather_desc:      Literal["Clear","Cloudy","Precipitation","Storm"]
     temp:              float
     demand_multiplier: float
     is_school_day:     bool
     is_public_holiday: bool
-    is_pandemic:       bool   = False
-    start:             str    # "06:00"
-    end:               str    # "23:30"
+    is_pandemic:       bool = False
+    start:             str  # "06:00"
+    end:               str  # "23:30"
 
 @app.post("/simulate")
 def simulate(req: SimRequest):
-    print("Received request:", req)
     sc = Scenario(
-        weather_desc=req.weather_desc,
-        temp=req.temp,
-        demand_multiplier=req.demand_multiplier,
-        is_school_day=req.is_school_day,
-        is_public_holiday=req.is_public_holiday,
-        is_pandemic=req.is_pandemic,
-        bus_type=STD
+        weather_desc      = req.weather_desc,
+        temp              = req.temp,
+        demand_multiplier = req.demand_multiplier,
+        is_school_day     = req.is_school_day,
+        is_public_holiday = req.is_public_holiday,
+        is_pandemic       = req.is_pandemic,
+        bus_type          = STD
     )
     df = run_dynamic(sc, req.start, req.end)
-    print(f"Returning {len(df)} records")
     return df.to_dict(orient="records")

@@ -263,6 +263,7 @@ def simulate(req: SimRequest):
         is_school_day     = req.is_school_day,
         is_public_holiday = req.is_public_holiday,
         is_pandemic       = req.is_pandemic
+        bus_type: BusType = STD
     )
     df = run_dynamic(sc, req.start, req.end)
     return df.to_dict(orient="records")

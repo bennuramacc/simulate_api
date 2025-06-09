@@ -1,5 +1,4 @@
 # simulate_api
-# simulate\_api
 
 **simulate\_api** is a FastAPI‑based web service that runs a detailed bus route simulation using real-world data and a trained CatBoost model. It exposes a single endpoint (`/simulate`) to generate a dynamic trip schedule, headways, vehicle types, and load estimates for a user‑specified time window and scenario parameters.
 

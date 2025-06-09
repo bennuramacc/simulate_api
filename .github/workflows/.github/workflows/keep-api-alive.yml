@@ -1,0 +1,15 @@
+name: Keep Simulation API Alive
+
+on:
+  schedule:
+    # Her 5 dakikada bir tetikle
+    - cron: '*/5 * * * *'
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping simulate_api
+        run: |
+          # 10s timeout, hata alsa da build hata sayılmasın
+          curl -m 10 -s https://simulate-api-t700.onrender.com/ || echo "Ping failed"

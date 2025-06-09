@@ -199,33 +199,36 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
     end_dt = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
 
     while dep <= end_dt:
+        # 1) Kalkış anındaki beklenen yükü hesapla:
+        exp_load = estimate_expected_load(dep, sc)
+        # 2) Eğer beklenen yük belirlediğiniz threshold’un (örneğin %90) üstündeyse körüklü ata:
+        if exp_load > CURRENT_THR:
+            sc.bus_type = ARTIC
+        else:
+            sc.bus_type = STD
+
+        # 3) Trip’i simüle et:
         out = one_trip(dep, sc)
 
-        # önce STD kabul et
+        # 4) Çıkan sonuçlara göre gerekirse override
         out["headway"] = headway
-        out["max_occ"] *= 3
-        out["boarded"] *= 3
-        out["load_%"] = round(100 * out["max_occ"] / out["capacity"], 2)
-
-        # %90 üzeri ise ARTIC
+        out["max_occ"]  *= 3
+        out["boarded"]  *= 3
+        out["load_%"]   = round(100 * out["max_occ"] / out["capacity"], 2)
         if out["load_%"] > 90:
-            sc.bus_type = ARTIC
-            out["bus_type"]  = ARTIC.name
-            out["capacity"]  = ARTIC.capacity
-            out["load_%"]    = round(100 * out["max_occ"] / out["capacity"], 2)
+            sc.bus_type      = ARTIC
+            out["bus_type"] = ARTIC.name
+            out["capacity"] = ARTIC.capacity
+            out["load_%"]   = round(100 * out["max_occ"] / out["capacity"], 2)
 
         recs.append(out)
 
-        # headway güncellemesi
+        # 5) Headway güncellemesi
         diff = out["trip_time"] - base
-        if diff > 30:
-            headway = 10
-        elif diff > 20:
-            headway = 15
-        elif diff > 10:
-            headway = 20
-        else:
-            headway = 30
+        if   diff > 30: headway = 10
+        elif diff > 20: headway = 15
+        elif diff > 10: headway = 20
+        else:           headway = 30
 
         dep += dt.timedelta(minutes=headway)
 

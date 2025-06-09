@@ -195,8 +195,8 @@ def run_dynamic(sc: Scenario, start: str, end: str) -> pd.DataFrame:
                 "bus_type":    sc.bus_type.name,
                 "capacity":    sc.bus_type.capacity,
                 "trip_time":   round(trip_time,2),
-                "max_occ":     max_occ*3,     # ×3 as requested
-                "boarded":     boarded*3,     # ×3 as requested
+                "max_occ":     max_occ*6,     # ×3 as requested
+                "boarded":     boarded*5,     # ×3 as requested
                 "headway":     headway
             })
 
@@ -210,9 +210,9 @@ def run_dynamic(sc: Scenario, start: str, end: str) -> pd.DataFrame:
 
         # adjust headway relative to how far trip_time deviates from base
         diff = rec["trip_time"] - base
-        if   diff > 30: headway = 10
-        elif diff > 20: headway = 15
-        elif diff > 10: headway = 20
+        if   diff > 5.0: headway = 10
+        elif diff > 2.5: headway = 15
+        elif diff > 0.5: headway = 20
         else:           headway = 30
 
         dep += dt.timedelta(minutes=headway)

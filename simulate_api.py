@@ -216,8 +216,8 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
 
         out = one_trip(dep, sc)
         out["headway"] = headway
-        out["max_occ"] *= 3
-        out["boarded"] *= 3
+        out["max_occ"] *= 6
+        out["boarded"] *= 5
         out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
 
         # eğer load% > 90 ise körüklü ata
@@ -231,9 +231,9 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
 
         # headway güncelle
         diff = out["trip_time"] - base
-        if   diff > 30: headway = 10
-        elif diff > 20: headway = 15
-        elif diff > 10: headway = 20
+        if   diff > 3: headway = 10
+        elif diff > 2: headway = 15
+        elif diff > 1: headway = 20
         else:           headway = 30
 
         dep += dt.timedelta(minutes=headway)

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
 from dataclasses import dataclass
+fr# simulation_api.py
+
+# -*- coding: utf-8 -*-
+import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
+from dataclasses import dataclass
 from catboost import CatBoostRegressor
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Literal, Optional
+from typing import Literal
 
 # ─── 0) Dosya yolları ────────────────────────────────────────
 BASE_DIR     = os.path.dirname(__file__)
@@ -14,7 +19,16 @@ ARRIVAL_XLS  = os.path.join(BASE_DIR, "passenger_arrival_rates_by_stop.xlsx")
 DEST_PATH    = os.path.join(BASE_DIR, "DestinationProbabilities_Corrected.xlsx")
 MODEL_PATH   = os.path.join(BASE_DIR, "segment_model.cbm")
 
-# ─── 1) Travel+Dwell tablosu ───────────────────────────────────
+# ─── FastAPI uygulaması & CORS ───────────────────────────────
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       # Gerekirse sadece frontend origin’inizi ekleyin
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── 1) Travel + Dwell tablosu ───────────────────────────────
 def build_stops() -> pd.DataFrame:
     df = pd.read_excel(TRAVEL_XLSX, header=1)
     df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
@@ -28,14 +42,13 @@ def build_stops() -> pd.DataFrame:
 
 SEG_DF = build_stops()
 
-# ─── 2) Arrival‐rate haritası ─────────────────────────────────────
+# ─── 2) Arrival‐rate haritası ──────────────────────────────────
 arrival_sheets = pd.read_excel(ARRIVAL_XLS, sheet_name=None)
 time_re = re.compile(r"^\d{2}:\d{2}-\d{2}:\d{2}$")
 ARRIVAL_MAP = {}
 for name, df in arrival_sheets.items():
     df = df.set_index(df.columns[0])
-    cols = [c for c in df.columns if time_re.match(c)]
-    ARRIVAL_MAP[name] = df[cols]
+    ARRIVAL_MAP[name] = df[[c for c in df.columns if time_re.match(c)]]
 
 DAY_MAP = {
     "Monday":"Pazartesi","Tuesday":"Salı","Wednesday":"Çarşamba",
@@ -58,13 +71,14 @@ def get_lambda(stop: str, now: dt.datetime) -> float:
             return float(val)
     return float(row.iloc[-1])
 
-# ─── 3) Destination probabilities ────────────────────────────────
+# ─── 3) Destination probabilities ─────────────────────────────
 dp_raw = pd.read_excel(DEST_PATH, index_col=0)
 dp     = dp_raw.div(dp_raw.sum(axis=1), axis=0).fillna(0)
 DEST   = {o:(list(dp.columns), dp.loc[o].tolist()) for o in dp.index}
 
-# ─── 4) CatBoost modeli ve feature list ─────────────────────────
-CAT   = CatBoostRegressor(); CAT.load_model(MODEL_PATH)
+# ─── 4) CatBoost modeli & feature list ────────────────────────
+CAT = CatBoostRegressor()
+CAT.load_model(MODEL_PATH)
 FEATS = [
  'weather_temp','HOUR',
  'DAY_OF_WEEK_1','DAY_OF_WEEK_2','DAY_OF_WEEK_3',
@@ -84,9 +98,9 @@ def make_feats(now: dt.datetime, sc: "Scenario", km: float, lags: list[float]) -
     f["HOUR"] = now.hour
     f["weather_temp"] = sc.temp
     f[f"DAY_OF_WEEK_{now.weekday()+1}"] = 1
-    f[f"MONTH_{now.month}"] = 1
-    f["HOLIDAY_CATEGORY_Holiday"] = int(sc.is_public_holiday)
-    f["HOLIDAY_CATEGORY_Normal"]  = int(not sc.is_public_holiday)
+    f[f"MONTH_{now.month}"]          = 1
+    f["HOLIDAY_CATEGORY_Holiday"]    = int(sc.is_public_holiday)
+    f["HOLIDAY_CATEGORY_Normal"]     = int(not sc.is_public_holiday)
     f["SCHOOL_STATUS_School Open"]   = int(sc.is_school_day)
     f["PANDEMIC_CONDITION_Pandemic"] = int(sc.is_pandemic)
     wd = f"weather_description_{sc.weather_desc}"
@@ -96,7 +110,7 @@ def make_feats(now: dt.datetime, sc: "Scenario", km: float, lags: list[float]) -
         f[f"HATSURESI_LAG_{i}"] = v
     return [f[c] for c in FEATS]
 
-# ─── 5) BusType & Scenario ───────────────────────────────────────
+# ─── 5) BusType & Scenario ─────────────────────────────────────
 @dataclass(frozen=True)
 class BusType:
     name: str
@@ -115,7 +129,7 @@ class Scenario:
     is_pandemic:       bool = False
     bus_type:          BusType = STD
 
-# ─── 6) Tek bir sefer simülasyonu ────────────────────────────────
+# ─── 6) Tek bir sefer simülasyonu ───────────────────────────────
 def one_trip(dep: dt.datetime, sc: Scenario) -> dict:
     LOG = []
     env = simpy.Environment()
@@ -132,14 +146,12 @@ def one_trip(dep: dt.datetime, sc: Scenario) -> dict:
             env.process(self.run())
 
         def run(self):
-            # kalkış gecikmesi
             delay = (self.dep - dt.datetime.combine(self.dep.date(), dt.time())).seconds/60
             yield self.env.timeout(delay)
 
             trip_time = 0.0
             for r in self.seg.itertuples():
                 now,stop,km = self.curr, r.stop, r.km
-                # travel time predict
                 feat_df = pd.DataFrame([make_feats(now,self.sc,km,self.lags)], columns=FEATS)
                 sec = float(CAT.predict(feat_df)[0])
                 dur = sec/60
@@ -148,20 +160,17 @@ def one_trip(dep: dt.datetime, sc: Scenario) -> dict:
                 yield self.env.timeout(dur)
                 self.curr += dt.timedelta(minutes=dur)
 
-                # in‐out yolcu
                 out = [p for p in self.pax if p==stop]
                 self.pax = [p for p in self.pax if p!=stop]
-                lam = get_lambda(stop,now) * ARR_SCALE * self.sc.demand_multiplier
+                lam = get_lambda(stop,now)*ARR_SCALE*self.sc.demand_multiplier
                 if self.sc.is_public_holiday: lam *= 0.8
                 nin = np.random.poisson(lam * dur)
                 dests,probs = DEST.get(stop,([],[]))
-                new = (np.random.choice(dests,size=nin,p=probs).tolist() 
-                       if dests else [stop]*nin)
+                new = (np.random.choice(dests,size=nin,p=probs).tolist() if dests else [stop]*nin)
                 self.pax.extend(new)
                 self.boarded += nin
                 self.max_occ = max(self.max_occ, len(self.pax))
 
-                # dwell
                 dwell = (r.dwell_sec/60) + len(out)*0.03 + nin*0.01
                 if self.sc.is_school_day:    dwell *= 1.1
                 if self.sc.is_public_holiday:dwell *= 1.2
@@ -191,39 +200,36 @@ def avg_trip(sc: Scenario, start: str, end: str) -> float:
     ])
 
 # ─── 8) Dinamik slot‐day ──────────────────────────────────────────
+CURRENT_THR = 90  # orijinal eşik değeri
+
 def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFrame:
     base = avg_trip(sc, start, end)
     recs = []
     headway = 30
-    dep = dt.datetime.combine(dt.date.today(), pd.to_datetime(start).time())
-    end_dt = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
+    dep     = dt.datetime.combine(dt.date.today(), pd.to_datetime(start).time())
+    end_dt  = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
 
     while dep <= end_dt:
-        # 1) Kalkış anındaki beklenen yükü hesapla:
-        exp_load = estimate_expected_load(dep, sc)
-        # 2) Eğer beklenen yük belirlediğiniz threshold’un (örneğin %90) üstündeyse körüklü ata:
-        if exp_load > CURRENT_THR:
-            sc.bus_type = ARTIC
-        else:
-            sc.bus_type = STD
+        # hangi araç?
+        exp = estimate_expected_load(dep, sc)
+        sc.bus_type = ARTIC if exp > CURRENT_THR else STD
 
-        # 3) Trip’i simüle et:
         out = one_trip(dep, sc)
-
-        # 4) Çıkan sonuçlara göre gerekirse override
         out["headway"] = headway
-        out["max_occ"]  *= 3
-        out["boarded"]  *= 3
-        out["load_%"]   = round(100 * out["max_occ"] / out["capacity"], 2)
+        out["max_occ"] *= 3
+        out["boarded"] *= 3
+        out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
+
+        # eğer load% > 90 ise körüklü ata
         if out["load_%"] > 90:
-            sc.bus_type      = ARTIC
+            sc.bus_type    = ARTIC
             out["bus_type"] = ARTIC.name
             out["capacity"] = ARTIC.capacity
-            out["load_%"]   = round(100 * out["max_occ"] / out["capacity"], 2)
+            out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
 
         recs.append(out)
 
-        # 5) Headway güncellemesi
+        # headway güncelle
         diff = out["trip_time"] - base
         if   diff > 30: headway = 10
         elif diff > 20: headway = 15
@@ -234,36 +240,28 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
 
     return pd.DataFrame(recs)
 
-# ─── 9) FastAPI endpoint ───────────────────────────────────────────
+# ─── 9) Pydantic model & endpoint ────────────────────────────────
 class SimRequest(BaseModel):
     weather_desc:      Literal["Clear","Cloudy","Precipitation","Storm"]
     temp:              float
     demand_multiplier: float
     is_school_day:     bool
     is_public_holiday: bool
-    is_pandemic:       bool = False
-    start:             str   # "06:00"
-    end:               str   # "23:30"
-
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    is_pandemic:       bool   = False
+    start:             str    # "06:00"
+    end:               str    # "23:30"
 
 @app.post("/simulate")
 def simulate(req: SimRequest):
-    print("Received:", req)
+    print("Received request:", req)
     sc = Scenario(
-        weather_desc      = req.weather_desc,
-        temp              = req.temp,
-        demand_multiplier = req.demand_multiplier,
-        is_school_day     = req.is_school_day,
-        is_public_holiday = req.is_public_holiday,
-        is_pandemic       = req.is_pandemic,
-        bus_type          = STD
+        weather_desc=req.weather_desc,
+        temp=req.temp,
+        demand_multiplier=req.demand_multiplier,
+        is_school_day=req.is_school_day,
+        is_public_holiday=req.is_public_holiday,
+        is_pandemic=req.is_pandemic,
+        bus_type=STD
     )
     df = run_dynamic(sc, req.start, req.end)
     print(f"Returning {len(df)} records")

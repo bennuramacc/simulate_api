@@ -242,16 +242,22 @@ class SimRequest(BaseModel):
 
 @app.post("/simulate")
 def simulate(req: SimRequest):
-    print("Received request:", req)
-    sc = Scenario(
-        weather_desc=req.weather_desc,
-        temp=req.temp,
-        demand_multiplier=req.demand_multiplier,
-        is_school_day=req.is_school_day,
-        is_public_holiday=req.is_public_holiday,
-        is_pandemic=req.is_pandemic,
-        bus_type=STD
-    )
-    df = run_dynamic(sc, req.start, req.end)
-    print(f"Returning {len(df)} records")
-    return df.to_dict(orient="records")
+    print(f"[SIM REQUEST] {req}")
+    try:
+        sc = Scenario(
+            weather_desc=req.weather_desc,
+            temp=req.temp,
+            demand_multiplier=req.demand_multiplier,
+            is_school_day=req.is_school_day,
+            is_public_holiday=req.is_public_holiday,
+            is_pandemic=req.is_pandemic,
+            bus_type=STD
+        )
+        df = run_dynamic(sc, req.start, req.end)
+        print(f"[SIM RESULT] Üretilen kayıt sayısı: {len(df)}")
+        if df.empty:
+            print("⚠️ Uyarı: Simülasyondan hiç kayıt gelmedi!")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        print(f"[SIM ERROR] {e}")
+        raise

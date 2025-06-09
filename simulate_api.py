@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
 from dataclasses import dataclass
-fr# simulation_api.py
-
-# -*- coding: utf-8 -*-
-import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
-from dataclasses import dataclass
 from catboost import CatBoostRegressor
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

@@ -237,7 +237,7 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
 
         # 3) Gerçek yükü ölçekle ve oranı hesapla
         out["max_occ"] *= 7
-        out["boarded"] *= 5
+        out["boarded"] *= 1
         out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
 
         # 4) **Gerçek doluluk oranına göre de override et**

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, re, datetime as dt, numpy as np, pandas as pd, simpy, random
+import datetime
 from dataclasses import dataclass
 from typing import Literal
 from catboost import CatBoostRegressor
@@ -257,7 +258,7 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
         elif diff > 0.5: headway = 15
         else:            headway = 20
 
-        dep += datetime.timedelta(minutes=headway)
+        dep += dt.timedelta(minutes=headway)
 
     return pd.DataFrame(recs)
 

@@ -237,7 +237,7 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
         out["headway"] = headway
 
         # 3) Gerçek yükü ölçekle ve oranı hesapla
-        out["max_occ"] *= 7
+        out["max_occ"] *= 4
         out["boarded"] *= 1
         out["load_%"]  = round(100 * out["max_occ"] / out["capacity"], 2)
 

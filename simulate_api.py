@@ -131,47 +131,83 @@ class Scenario:
 
 # ─── 7) Tek bir sefer simülasyonu ─────────────────────────────────
 def one_trip(dep: dt.datetime, sc: Scenario) -> dict:
-    LOG=[]; env=simpy.Environment()
+    LOG = []
+    env = simpy.Environment()
+
     class Bus:
-        def __init__(self,env,dep,sc):
-            self.env,self.dep,self.sc=env,dep,sc
-            self.curr=dep; self.seg=SEG_DF.copy()
-            self.pax=[]; self.max_occ=0; self.boarded=0; self.lags=[0]*5
+        def __init__(self, env, dep, sc):
+            self.env, self.dep, self.sc = env, dep, sc
+            self.curr      = dep
+            self.seg       = SEG_DF.copy()
+            self.pax       = []
+            self.max_occ   = 0
+            self.boarded   = 0
+            self.lags      = [0]*5
+            self.wait_times = []      # ← Bekleme sürelerini biriktirecek liste
             env.process(self.run())
+
         def run(self):
-            delay = (self.dep - dt.datetime.combine(self.dep.date(), dt.time())).seconds/60
+            # Kalkış öncesi bekleme
+            delay = (self.dep - dt.datetime.combine(self.dep.date(), dt.time())).seconds / 60
             yield self.env.timeout(delay)
-            trip_time=0.0
+
+            trip_time = 0.0
+
             for r in self.seg.itertuples():
-                now,stop,km=self.curr,r.stop,r.km
-                feat_df=pd.DataFrame([make_feats(now,self.sc,km,self.lags)],columns=FEATS)
-                sec=float(CAT.predict(feat_df)[0]); dur=sec/60
-                self.lags=[dur]+self.lags[:4]; trip_time+=dur
+                now, stop, km = self.curr, r.stop, r.km
+
+                # 1) Seyahat süresi tahmini
+                feat_df = pd.DataFrame([make_feats(now, self.sc, km, self.lags)], columns=FEATS)
+                sec     = float(CAT.predict(feat_df)[0])
+                dur     = sec / 60
+                self.lags = [dur] + self.lags[:4]
+                trip_time += dur
+
                 yield self.env.timeout(dur)
-                self.curr+=dt.timedelta(minutes=dur)
-                out=[p for p in self.pax if p==stop]
-                self.pax=[p for p in self.pax if p!=stop]
-                lam=get_lambda(stop,now)*ARR_SCALE*self.sc.demand_multiplier
-                if self.sc.is_public_holiday: lam*=0.8
-                nin=np.random.poisson(lam*dur)
-                dests,probs=DEST.get(stop,([],[]))
-                new=(np.random.choice(dests,size=nin,p=probs).tolist() if dests else [stop]*nin)
-                self.pax.extend(new); self.boarded+=nin
-                self.max_occ=max(self.max_occ,len(self.pax))
-                dwell=(r.dwell_sec/60)+len(out)*0.03+nin*0.01
-                if self.sc.is_school_day:    dwell*=1.1
-                if self.sc.is_public_holiday:dwell*=1.2
-                trip_time+=dwell; yield self.env.timeout(dwell)
-                self.curr+=dt.timedelta(minutes=dwell)
+                self.curr += dt.timedelta(minutes=dur)
+
+                # 2) İnme-bindirme
+                out = [p for p in self.pax if p == stop]
+                self.pax = [p for p in self.pax if p != stop]
+
+                lam = get_lambda(stop, now) * ARR_SCALE * self.sc.demand_multiplier
+                if self.sc.is_public_holiday:
+                    lam *= 0.8
+                nin = np.random.poisson(lam * dur)
+
+                dests, probs = DEST.get(stop, ([], []))
+                new = (np.random.choice(dests, size=nin, p=probs).tolist() if dests else [stop] * nin)
+                self.pax.extend(new)
+                self.boarded += nin
+                self.max_occ = max(self.max_occ, len(self.pax))
+
+                # 3) Bekleme (dwell) süresi
+                dwell = (r.dwell_sec / 60) + len(out) * 0.03 + nin * 0.01
+                if self.sc.is_school_day:
+                    dwell *= 1.1
+                if self.sc.is_public_holiday:
+                    dwell *= 1.2
+
+                # Bekleme süresini kaydet
+                self.wait_times.append(dwell)
+
+                trip_time += dwell
+                yield self.env.timeout(dwell)
+                self.curr += dt.timedelta(minutes=dwell)
+
+            # Sonuç kaydı: avg_wait eklendi
             LOG.append({
-                "depart_time":self.dep.strftime("%H:%M"),
-                "bus_type":   self.sc.bus_type.name,
-                "capacity":   self.sc.bus_type.capacity,
-                "trip_time":  round(trip_time,2),
-                "max_occ":    self.max_occ,
-                "boarded":    self.boarded
+                "depart_time": self.dep.strftime("%H:%M"),
+                "bus_type":    self.sc.bus_type.name,
+                "capacity":    self.sc.bus_type.capacity,
+                "trip_time":   round(trip_time, 2),
+                "max_occ":     self.max_occ,
+                "boarded":     self.boarded,
+                "avg_wait":    round(sum(self.wait_times) / len(self.wait_times), 2)
             })
-    Bus(env,dep,sc); env.run()
+
+    Bus(env, dep, sc)
+    env.run()
     return LOG[0]
 
 # ─── 8) Ortalama trip zamanı ────────────────────────────────────────

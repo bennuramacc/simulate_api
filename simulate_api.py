@@ -217,36 +217,39 @@ def avg_trip(sc: Scenario, start: str, end: str) -> float:
                     for t in times])
 
 # ─── 9) Dinamik slot-day ──────────────────────────────────────────
-CURRENT_THR=90
+CURRENT_THR = 90
+
 def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFrame:
-    base = avg_trip(sc,start,end)
-    recs=[]; headway=30
-    dep    = dt.datetime.combine(dt.date.today(),pd.to_datetime(start).time())
-    end_dt = dt.datetime.combine(dt.date.today(),pd.to_datetime(end).time())
-    while dep<=end_dt:
-        # **Burada gerçekten ARTIC seçiliyor**
+    base   = avg_trip(sc, start, end)
+    recs   = []
+    headway = 30
+    dep     = dt.datetime.combine(dt.date.today(), pd.to_datetime(start).time())
+    end_dt  = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
+
+    while dep <= end_dt:
+        # 1) İlk araç tipi seçimi: beklenen talebe göre
         exp = estimate_expected_load(dep, sc)
         sc.bus_type = ARTIC if exp > CURRENT_THR else STD
 
+        # 2) Seferi simüle et
         out = one_trip(dep, sc)
-        out["headway"]   = headway
+        out["headway"] = headway
+
+        # 3) Yükü raporlamak için ölçekle
         out["max_occ"]  *= 6
         out["boarded"]  *= 5
-        out["load_%"]    = round(100*out["max_occ"]/out["capacity"],2)
+        out["load_%"]    = round(100 * out["max_occ"] / out["capacity"], 2)
 
-        if out["load_%"]>90:
-            sc.bus_type     = ARTIC
-            out["bus_type"] = ARTIC.name
-            out["capacity"] = ARTIC.capacity
-            out["load_%"]   = round(100*out["max_occ"]/out["capacity"],2)
+        # --- İKİNCİ AŞAMADAKİ ZORLAMA BLOĞU SİLİNDİ ---
 
         recs.append(out)
 
+        # 4) Headway’i ayarla
         diff = out["trip_time"] - base
-        if   diff>2.5: headway=7
-        elif diff>1: headway=10
-        elif diff>0.5: headway=15
-        else:        headway=20
+        if   diff > 2.5: headway = 7
+        elif diff > 1:   headway = 10
+        elif diff > 0.5: headway = 15
+        else:            headway = 20
 
         dep += dt.timedelta(minutes=headway)
 

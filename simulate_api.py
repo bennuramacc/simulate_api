@@ -218,7 +218,7 @@ def avg_trip(sc: Scenario, start: str, end: str) -> float:
                     for t in times])
 
 # ─── 9) Dinamik slot-day ──────────────────────────────────────────
-CURRENT_THR = 90
+CURRENT_THR = 150
 
 def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFrame:
     base    = avg_trip(sc, start, end)

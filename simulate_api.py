@@ -223,8 +223,8 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
     base    = avg_trip(sc, start, end)
     recs    = []
     headway = 30
-    dep     = datetime.datetime.combine(datetime.date.today(), pd.to_datetime(start).time())
-    end_dt  = datetime.datetime.combine(datetime.date.today(), pd.to_datetime(end).time())
+    dep     = dt.datetime.combine(dt.date.today(), pd.to_datetime(start).time())
+    end_dt  = dt.datetime.combine(dt.date.today(), pd.to_datetime(end).time())
 
     while dep <= end_dt:
         # 1) İlk araç tipi seçimi: beklenen talebe göre

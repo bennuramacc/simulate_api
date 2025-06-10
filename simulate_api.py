@@ -194,11 +194,11 @@ def run_dynamic(sc: Scenario, start: str="06:00", end: str="23:00") -> pd.DataFr
 
         out = one_trip(dep, sc)
         out["headway"]   = headway
-        out["max_occ"]  *= 6
+        out["max_occ"]  *= 7
         out["boarded"]  *= 5
         out["load_%"]    = round(100*out["max_occ"]/out["capacity"],2)
 
-        if out["load_%"]>90:
+        if out["load_%"]>85:
             sc.bus_type     = ARTIC
             out["bus_type"] = ARTIC.name
             out["capacity"] = ARTIC.capacity
